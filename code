@@ -1,0 +1,333 @@
+################# ARTICLE HEPATITIS I CONSULAT DE PAKISTAN ####################
+####################### ROTACIÓ DRASSANES ESTIU 2025 ##########################
+######## RESIDÈNCIA EN MEDICINA PREVENTIVA I SALUT PÚBLICA (R2) ###############
+
+#Author: Helena Ortin Berga
+#Last updated: 25 d'agost, 2025
+#email de contacte: helena.ortini@vallhebron.cat
+
+########################## Càrrega de paquets #################################
+
+pacman::p_load(
+  rio,
+  janitor,
+  gtsummary,
+  here,      #for file path
+  epikit,    #categorías de edad
+  flextable, #para tablas
+  foreign,   #para importar archivos stata, conserva etiquetas de valores
+  readxl,    #importar archivos excel
+  readr,     #importar archivos formato csv y delimitados por caracteres especiales
+  summarytools, #descripción base de datos
+  table1,    #tablas
+  ggplot2,   #gráficos
+  compareGroups, #comparación grupos medias descriptivas
+  openxlsx,  #exportación a excel
+  gmodels,   #tablas doble entrada
+  car, 
+  lmtest,    #regresiones logísticas (modelo de regresión logística)
+  survival,  #para curvas de supervivencia (Kaplan-Meier)
+  tidyverse, 
+  dplyr,      #para manipular 
+  eeptools,
+  forcats,
+  writexl,
+  lme4,
+  lmerTest,
+  performance,
+  rmarkdown,
+  cardx,      #per la bivariada, per comparar entre dos grups
+  broom,
+  forcats,
+  linelist
+)
+
+########################### Importació BBDD ###################################
+
+setwd("~/Dropbox/Mac/Documents/TFM")
+
+pak <- import("~/Dropbox/Mac/Documents/TFM/Data/pak_sino.xlsx")
+
+pak <- import(here("data", "pak_sino.xlsx"))
+
+########################### Depuració BBDD ####################################
+#Clean names i llistat dels noms de les variables
+pak_si <- pak %>% 
+  clean_names()
+
+nscr <- names(pak_si) %>% 
+  as.data.frame()
+
+#Exportació de la BBDD de casos depurada en excel:
+write.xlsx(age, file="edat_si.xlsx",
+           sheetName = "Dades", append = FALSE)
+
+######################## Recodificació de variables  ##########################
+age <- pak_si %>%
+  filter(!is.na(data_de_naixement))
+
+age$data_de_naixement
+age$created_date
+
+birth <- age$data_de_naixement
+inter <- age$created_date
+
+bi <- as.Date.POSIXct(birth)
+indu <- as.Date.POSIXct(inter)
+
+age <- age %>%
+  mutate(
+    edat = age_calc(bi,
+                    indu,
+                    units = "years")
+  )
+
+median(age$edat)
+
+edat <- age$edat
+
+q1 <- quantile(edat, 0.25, na.rm = TRUE)
+q3 <- quantile(edat, 0.75, na.rm = TRUE)
+
+q1
+q3
+
+pak_si <- pak_si %>%
+  mutate(
+    genere2 = recode(genere, "dona" = "Female", "Dona" = "Female", "home" = "Male", "Home" = "Male")
+    )
+
+pak_si <- pak_si %>%
+  mutate(
+    cribat = recode(cribat, "si" = "Yes", "no" = "No")
+  )
+
+pak_si <- pak_si %>%
+  mutate(
+    edat_4 = case_when(
+      edat >= 18 & edat <= 30 ~ "18-30 years",
+      edat >= 31 & edat <= 45 ~ "31-45 years",
+      edat >= 46 & edat <= 60 ~ "46-60 years", 
+      edat >= 60 ~ "> 60 years",
+      TRUE ~ NA_character_
+    )
+  )
+
+pak_si %>% 
+  tabyl(nivell_d_estudis)
+
+################### Taula descriptiva bàsica participants #####################
+
+#Vector de variables d'interès
+var_taules <- c(
+  "genere2", "edat", "edat_4", "nivell_d_estudis"
+)
+
+#Tote les variables són no numèriques
+pak_si <- pak_si %>%
+  mutate(
+    genere2 = factor(genere2, levels = c("Female", "Male")),
+    edat_4 = factor(edat_4, levels = c("18-30 years", "31-45 years", "46-60 years", "> 60 years")),
+    nivell_d_estudis = recode(nivell_d_estudis, "estudis_primaris" = "Primary", "estudis_secundaris" = "Secondary", "grado_superior" = "Professional", "universitat" = "University", "sense_estudis" = "No formal education"),
+    nivell_d_estudis = factor(nivell_d_estudis, levels = c("Primary", "Secondary", "Professional", "University", "No formal education"))
+  )
+
+#Construcció de la taula (amb missings)
+tb_descriptives_def <- pak_si %>%
+  select(any_of(var_taules)) %>%
+  tbl_summary(
+    statistic = list(
+      all_categorical() ~ "{n} | {p}%",
+      all_continuous() ~ "{mean} ± {sd}"
+    ),
+    missing = "no",
+    label = list(
+      genere2 ~ "**Sex**",
+      edat ~ "**Age, mean ± SD**",
+      edat_4 ~ "**Age**",
+      nivell_d_estudis ~ "**Level of education**"
+    )
+  ) %>%
+  modify_header(label = "**Sociodemographic characteristics of the study population**")
+
+tb_descriptives_def
+
+#Exportació de la taula
+export(as.data.frame(tb_descriptives_def), here("Output", "001_descriptiva_1.xlsx"))
+
+####################### Taula bivariada i comparació ##########################
+
+var_taules <- c(
+  "genere2", "edat_4", "nivell_d_estudis", "cribat"
+)
+
+tb_bivariada <- pak_si %>%
+  select(any_of(var_taules)) %>%
+  tbl_summary(
+    by = cribat,
+    statistic = all_categorical() ~ "{n} | {p}%",
+    percent = "row",
+    missing = "no",
+    label = list(
+      genere2 ~ "**Sex**",
+      edat_4 ~ "**Age**",
+      nivell_d_estudis ~ "**Level of education**"
+    )
+  ) %>%
+  add_p(
+    test = all_categorical() ~ "chisq.test",
+    pvalue_fun = ~style_pvalue(.x, digits = 3)
+  )
+
+tb_bivariada
+
+export(as.data.frame(tb_bivariada), here("Output", "002_bivariada.xlsx")) # Exporta les descriptives a Excel
+
+################### Taula descriptiva bàsica raons del no #####################
+
+pak_no_cl <- pak_no_cl %>%
+  mutate(
+    reasons = recode(motius_del_no, "1" = "1.I'm scared of needles", "2" = "2.I don't have time", "3" = "3.I'm scared of the result", "4" = "4.I have already got tested by my doctor", "5" = "5.Other", "No consta" = "NA", "no consta" = "NA", "2 i 3" = "NA", "2 i 5" = "NA")
+  )
+
+#Vector de variables d'interès
+var_taules <- c(
+  "reasons"
+)
+
+#Tote les variables són no numèriques
+pak_no_cl <- pak_no_cl %>%
+  mutate(
+    reasons = factor(reasons, levels = c("1.I'm scared of needles", "2.I don't have time", "3.I'm scared of the result", "4.I have already got tested by my doctor", "5.Other"))
+  )
+
+#Construcció de la taula (amb missings)
+tb_descriptives_raons <- pak_no_cl %>%
+  select(any_of(var_taules)) %>%
+  tbl_summary(
+    statistic = list(
+      all_categorical() ~ "{n} | {p}%",
+      all_continuous() ~ "{mean} ± {sd}"
+    ),
+    missing = "no",
+    label = list(
+      reasons ~ "**Raons del no**"
+    )
+  ) %>%
+  modify_header(label = "**Sociodemographic characteristics of the study population**")
+
+tb_descriptives_raons
+
+#Exportació de la taula
+export(as.data.frame(tb_descriptives_raons), here("Output", "005_descriptiva_raons.xlsx"))
+
+####################### Taula de les raons del no per sexe ##########################
+#Importació base de dades ("pakistan_no")
+setwd("~/Dropbox/Mac/Documents/TFM")
+
+pak_no <- import("~/Dropbox/Mac/Documents/TFM/Data/pakistan_no.xlsx")
+
+pak_no <- import(here("data", "pakistan_no.xlsx"))
+
+#Depuració de la base de dades
+pak_no_cl <- pak_no %>% 
+  clean_names()
+
+nscr <- names(pak_no_cl) %>% 
+  as.data.frame()
+
+#Recodificació de variables
+pak_no_cl <- pak_no_cl %>%
+  mutate(
+    reasons = recode(motius_del_no, "1" = "1.I'm scared of needles", "2" = "2.I don't have time", "3" = "3.I'm scared of the result", "4" = "4.I have already got tested by my doctor", "5" = "5.Other", "No consta" = "NA", "no consta" = "NA", "2 i 3" = "NA", "2 i 5" = "NA")
+  )
+
+pak_no_cl <- pak_no_cl %>%
+  mutate(
+    gender = recode(genere, "Home" = "Male", "Dona" = "Female", "No consta" = "NA")
+  )
+
+pak_no_cl %>% 
+  tabyl(gender)
+
+var_taula <- c(
+  "reasons", "gender"
+)
+
+tb_bivariada_no <- pak_no_cl %>%
+  mutate(reasons = fct_drop(as.factor(reasons)),
+         reasons = factor(reasons, levels =c("1.I'm scared of needles", "2.I don't have time", "3.I'm scared of the result", "4.I have already got tested by my doctor", "5.Other")),
+         gender = factor(gender, levels = c("Male", "Female"))
+  ) %>%
+  select(any_of(var_taula)) %>%
+  tbl_summary(
+    by = gender,
+    statistic = all_categorical() ~ "{n} | {p}%",
+    percent = "row",
+    missing = "no",
+    label = list(
+      reasons ~ "**Reasons of the no**"
+    )
+  ) %>%
+  add_p(
+    test = all_categorical() ~ "chisq.test",
+    pvalue_fun = ~style_pvalue(.x, digits = 3)
+  )
+
+tb_bivariada_no
+
+export(as.data.frame(tb_bivariada_no), here("Output", "003_bivariada_no.xlsx")) # Exporta les descriptives a Excel
+
+####################### Taula de les raons del no per nivell d'estudis ##########################
+#Importació base de dades ("pakistan_no")
+setwd("~/Dropbox/Mac/Documents/TFM")
+
+pak_no <- import("~/Dropbox/Mac/Documents/TFM/Data/pakistan_no.xlsx")
+
+pak_no <- import(here("data", "pakistan_no.xlsx"))
+
+#Depuració de la base de dades
+pak_no_cl <- pak_no %>% 
+  clean_names()
+
+nscr <- names(pak_no_cl) %>% 
+  as.data.frame()
+
+#Recodificació de variables
+pak_no_cl <- pak_no_cl %>%
+  mutate(
+    reasons = recode(motius_del_no, "1" = "1.I'm scared of needles", "2" = "2.I don't have time", "3" = "3.I'm scared of the result", "4" = "4.I have already got tested by my doctor", "5" = "5.Other", "No consta" = "NA", "no consta" = "NA", "2 i 3" = "NA", "2 i 5" = "NA")
+  )
+
+pak_no_cl <- pak_no_cl %>%
+  mutate(
+    estudis = recode(nivell_destudis, "GS" = "Higher education", "P" = "Primary or no formal education", "S" = "Higher education", "SE" = "Primary or no formal education", "U" = "Higher education", "No consta" = "")
+  )
+
+var_taula <- c(
+  "reasons", "estudis"
+)
+
+tb_bivariada_no_estudis <- pak_no_cl %>%
+  mutate(reasons = fct_drop(as.factor(reasons)),
+         reasons = factor(reasons, levels =c("1.I'm scared of needles", "2.I don't have time", "3.I'm scared of the result", "4.I have already got tested by my doctor", "5.Other")),
+         estudis = factor(estudis, levels = c("Higher education", "Primary or no formal education"))
+  ) %>%
+  select(any_of(var_taula)) %>%
+  tbl_summary(
+    by = estudis,
+    statistic = all_categorical() ~ "{n} | {p}%",
+    percent = "row",
+    missing = "no",
+    label = list(
+      reasons ~ "**Reasons of the no**"
+    )
+  ) %>%
+  add_p(
+    test = all_categorical() ~ "chisq.test",
+    pvalue_fun = ~style_pvalue(.x, digits = 3)
+  )
+
+tb_bivariada_no_estudis
+
+export(as.data.frame(tb_bivariada_no_estudis), here("Output", "003_bivariada_no_estudis.xlsx")) # Exporta les descriptives a Excel
